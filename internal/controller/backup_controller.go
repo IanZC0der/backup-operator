@@ -18,6 +18,8 @@ package controller
 
 import (
 	"context"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"reflect"
@@ -33,6 +35,27 @@ import (
 
 	operatorkubecentercomv1beta1 "github.com/IanZC0der/backup-operator/api/v1beta1"
 )
+
+var logger *zap.Logger
+
+func init() {
+	loggerCfg := zap.Config{
+		Encoding:         "console",
+		Level:            zap.NewAtomicLevelAt(zap.InfoLevel),
+		EncoderConfig:    zap.NewProductionEncoderConfig(),
+		OutputPaths:      []string{"stdout"},
+		ErrorOutputPaths: []string{"stdout"},
+	}
+
+	loggerCfg.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
+	loggerCfg.EncoderConfig.EncodeLevel = zapcore.CapitalLevelEncoder
+
+	zapLogger, err := loggerCfg.Build()
+	if err != nil {
+		panic(err)
+	}
+	logger = zapLogger
+}
 
 // BackUpReconciler reconciles a BackUp object
 type BackUpReconciler struct {
