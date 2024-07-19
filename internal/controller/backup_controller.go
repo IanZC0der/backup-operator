@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/types"
 	"reflect"
 	"strconv"
 	"strings"
@@ -40,6 +41,7 @@ type BackUpReconciler struct {
 	BackupQueue map[string]operatorkubecentercomv1beta1.BackUp
 	Wg          sync.WaitGroup
 	Tickers     []*time.Ticker
+	lock        sync.Mutex
 }
 
 // +kubebuilder:rbac:groups=operator.kubecenter.com,resources=backups,verbs=get;list;watch;create;update;patch;delete
@@ -117,12 +119,19 @@ func (r *BackUpReconciler) StopTask() {
 func (r *BackUpReconciler) StartTask() {
 	for _, backup := range r.BackupQueue {
 		if !backup.Spec.Enable {
+			backup.Status.Active = false
+			r.UpdateStatus(backup)
 			continue
 		}
 
 		// the expected start time is specified in the spec. compare with the current time and get its actual start time
 		actualStartTime := r.GetActualStartTime(backup.Spec.StartTime)
-		ticker := time.NewTicker(time.Duration(actualStartTime))
+		// get next start time and set the status to active
+		backup.Status.Active = true
+		nextStartTime := r.GetNextTime(actualStartTime.Seconds())
+		backup.Status.NextTime = nextStartTime.Unix()
+		r.UpdateStatus(backup)
+		ticker := time.NewTicker(actualStartTime)
 		r.Tickers = append(r.Tickers, ticker)
 		// start a go routine to execute the backup task, add one to the counter
 		r.Wg.Add(1)
@@ -176,4 +185,33 @@ func (r *BackUpReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&operatorkubecentercomv1beta1.BackUp{}).
 		Complete(r)
+}
+
+func (r *BackUpReconciler) GetNextTime(currentSeconds float64) time.Time {
+	currentTime := time.Now()
+	return currentTime.Add(time.Duration(currentSeconds) * time.Second)
+}
+
+func (r *BackUpReconciler) UpdateStatus(backup operatorkubecentercomv1beta1.BackUp) {
+	r.lock.Lock()
+	defer r.lock.Unlock()
+	ctx := context.TODO()
+
+	namespacedName := types.NamespacedName{
+		Name:      backup.Name,
+		Namespace: backup.Namespace,
+	}
+
+	var backupK8S operatorkubecentercomv1beta1.BackUp
+
+	err := r.Get(ctx, namespacedName, &backupK8S)
+	if err != nil {
+		return
+	}
+	// update the backup status, including all the fields in backup.Status
+	backupK8S.Status = backup.Status
+	err = r.Client.Status().Update(ctx, &backupK8S)
+	if err != nil {
+		return
+	}
 }

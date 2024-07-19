@@ -69,7 +69,7 @@ type BackUpStatus struct {
 	// Whether the backup is active
 	Active bool `json:"active"`
 	// The time when the next backup will start
-	NextTime string `json:"nextTime"`
+	NextTime int64 `json:"nextTime"`
 	//The result of the last backup
 	LastBackupResult string `json:"lastBackupResult"`
 }
