@@ -18,10 +18,15 @@ package controller
 
 import (
 	"context"
+	"fmt"
+	"github.com/minio/minio-go/v7"
+	"github.com/minio/minio-go/v7/pkg/credentials"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
+	"os"
+	"os/exec"
 	"reflect"
 	"strconv"
 	"strings"
@@ -169,8 +174,19 @@ func (r *BackUpReconciler) StartTask() {
 				<-ticker.C
 				// reset the ticker. since the task is executed periodically
 				ticker.Reset(time.Duration(db.Spec.Period) * time.Minute)
-				// TODO: execute the task
-
+				logger.Sugar().Infof("backup task: [%s] will be executed again in [%d] minutes", db.Name, db.Spec.Period)
+				// set status to active and update the next execution time
+				db.Status.Active = true
+				db.Status.NextTime = r.GetNextTime(float64(db.Spec.Period) * 60).Unix()
+				err := r.ExecuteBackUpTask(db)
+				if err != nil {
+					logger.Sugar().Errorf("backup task: [%s] in namespace [%s] execution failed while trying to upload to minIO, err: %v", db.Name, db.Namespace, err)
+					db.Status.LastBackupResult = fmt.Sprintf("backup task failed to execute: %v", err)
+				} else {
+					logger.Sugar().Infof("backup task: [%s] in namespace [%s] successfully executed", db.Name, db.Namespace)
+					db.Status.LastBackupResult = "backup task successfully executed"
+				}
+				r.UpdateStatus(backup)
 			}
 		}(backup)
 	}
@@ -242,4 +258,85 @@ func (r *BackUpReconciler) UpdateStatus(backup operatorkubecentercomv1beta1.Back
 		logger.Sugar().Errorf("status update: [%s] in namespace [%s] failed, err: %v", backup.Name, backup.Namespace, err)
 		return
 	}
+}
+
+/*
+Dump the data in mysql server and upload it to minIO storage
+1. run the dump command to dump data from mysql server and save it to a new file
+2. upload it to minIO
+*/
+func (r *BackUpReconciler) ExecuteBackUpTask(backup operatorkubecentercomv1beta1.BackUp) error {
+
+	defer func() {
+		if err := recover(); err != nil {
+			logger.Sugar().Errorf("execute backup task failed, run time panic, err: %v, task name: %s", err, backup.Name)
+		}
+	}()
+
+	nowTime := time.Now()
+	backupDate := fmt.Sprintf("%02d-%02d", nowTime.Month(), nowTime.Day())
+	dirPath := fmt.Sprintf("/tmp/%s/%s/", backup.Name, backupDate)
+
+	// create the folder where the dumped data from mysql will be saved
+
+	if _, err := os.Stat(dirPath); err != nil {
+		if errCreatingDir := os.MkdirAll(dirPath, 0700); errCreatingDir == nil {
+			logger.Sugar().Infof("created dir: %s", dirPath)
+		} else {
+			logger.Sugar().Errorf("error creating dir: %s, err: %v", dirPath, errCreatingDir)
+			return errCreatingDir
+		}
+	}
+
+	filesInDir, err := os.ReadDir(dirPath)
+
+	if err != nil {
+		logger.Sugar().Errorf("error reading dir: %s, err: %v", dirPath, err)
+		return err
+	}
+	number := len(filesInDir) + 1
+
+	fileNameForDumpedData := fmt.Sprintf("%s#%d.sql", dirPath, number)
+
+	mysqlHost := backup.Spec.Origin.Host
+	mysqlPort := backup.Spec.Origin.Port
+	mysqlUsername := backup.Spec.Origin.Username
+	mysqlPassword := backup.Spec.Origin.Password
+	dumpMySQLCMD := fmt.Sprintf("mysqldump -h%s -P%d -u%s -p%s --all-databases > %s",
+		mysqlHost, mysqlPort, mysqlUsername, mysqlPassword, fileNameForDumpedData)
+	logger.Sugar().Infof("ready to dump mysql data, cmd: %s, backup task name: %s", dumpMySQLCMD, backup.Name)
+	cmd := exec.Command("bash", "-c", dumpMySQLCMD)
+	_, err = cmd.Output()
+	if err != nil {
+		logger.Sugar().Errorf("execute backup task failed, err: %v, backup task name: %s", err, backup.Name)
+		return err
+	}
+
+	//upload the data to minIO
+	endPoint := backup.Spec.Destination.Endpoint
+	accessKey := backup.Spec.Destination.AccessKey
+	accessSecret := backup.Spec.Destination.AccessSecret
+	bucketName := backup.Spec.Destination.BucketName
+	minIoClient, err := minio.New(endPoint, &minio.Options{
+		Creds:  credentials.NewStaticV4(accessKey, accessSecret, ""),
+		Secure: false,
+	})
+
+	if err != nil {
+		logger.Sugar().Errorf("error creating minio client, err: %v, backup task name: %s", err, backup.Name)
+		return err
+	}
+	obj, err := os.Open(fileNameForDumpedData)
+	if err != nil {
+		logger.Sugar().Errorf("error opening file: %s, err: %v, backup task name: %s", fileNameForDumpedData, err, backup.Name)
+		return err
+	}
+
+	ctx := context.TODO()
+	_, err = minIoClient.PutObject(ctx, bucketName, fileNameForDumpedData, obj, -1, minio.PutObjectOptions{})
+	if err != nil {
+		logger.Sugar().Errorf("error putting data to minio, err: %v, backup task name: %s", err, backup.Name)
+		return err
+	}
+	return err
 }

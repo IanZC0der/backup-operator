@@ -56,9 +56,9 @@ type BackUpSpec struct {
 	// The period for backups, in minutes.
 	Period int `json:"period"`
 	// The Origin of the data source
-	Origin string `json:"origin"`
+	Origin Origin `json:"origin"`
 	// The destination of the backup
-	Destination string `json:"destination"`
+	Destination Destination `json:"destination"`
 }
 
 // BackUpStatus defines the observed state of BackUp
