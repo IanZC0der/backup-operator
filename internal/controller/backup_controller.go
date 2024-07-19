@@ -18,7 +18,12 @@ package controller
 
 import (
 	"context"
-	"fmt"
+	"k8s.io/apimachinery/pkg/api/errors"
+	"reflect"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -31,7 +36,10 @@ import (
 // BackUpReconciler reconciles a BackUp object
 type BackUpReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme      *runtime.Scheme
+	BackupQueue map[string]operatorkubecentercomv1beta1.BackUp
+	Wg          sync.WaitGroup
+	Tickers     []*time.Ticker
 }
 
 // +kubebuilder:rbac:groups=operator.kubecenter.com,resources=backups,verbs=get;list;watch;create;update;patch;delete
@@ -50,10 +58,117 @@ type BackUpReconciler struct {
 func (r *BackUpReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	_ = log.FromContext(ctx)
 
-	// TODO(user): your logic here
-	fmt.Println("hello operator")
+	var backupK8S operatorkubecentercomv1beta1.BackUp
+	err := r.Client.Get(ctx, req.NamespacedName, &backupK8S)
+	if err != nil {
+		// resource doesn't exist
+		if errors.IsNotFound(err) {
+			// recource not found, delete from queue
+			r.DeleteQueue(req.Name)
+			return ctrl.Result{}, nil
+		}
+		return ctrl.Result{}, err
+	}
 
+	// resource exists
+
+	// if the spec is the same as the last backup, return
+	if lastBackup, ok := r.BackupQueue[backupK8S.Name]; ok {
+		if isSame := reflect.DeepEqual(backupK8S.Spec, lastBackup.Spec); isSame {
+			return ctrl.Result{}, nil
+		}
+	}
+
+	//add the backup to the queue
+	r.AddQueue(backupK8S)
 	return ctrl.Result{}, nil
+}
+
+func (r *BackUpReconciler) AddQueue(backup operatorkubecentercomv1beta1.BackUp) {
+	if r.BackupQueue == nil {
+		r.BackupQueue = make(map[string]operatorkubecentercomv1beta1.BackUp)
+	}
+	r.BackupQueue[backup.Name] = backup
+	// map if not thread-safe, stop the task first
+	r.StopTask()
+	go r.StartTask()
+}
+
+func (r *BackUpReconciler) DeleteQueue(name string) {
+	delete(r.BackupQueue, name)
+
+	r.StopTask()
+	// map if not thread-safe, stop the task first
+	go r.StartTask()
+}
+
+// Stop all the tickers
+func (r *BackUpReconciler) StopTask() {
+	for _, t := range r.Tickers {
+		if t != nil {
+			t.Stop()
+		}
+	}
+
+}
+
+/*
+ */
+func (r *BackUpReconciler) StartTask() {
+	for _, backup := range r.BackupQueue {
+		if !backup.Spec.Enable {
+			continue
+		}
+
+		// the expected start time is specified in the spec. compare with the current time and get its actual start time
+		actualStartTime := r.GetActualStartTime(backup.Spec.StartTime)
+		ticker := time.NewTicker(time.Duration(actualStartTime))
+		r.Tickers = append(r.Tickers, ticker)
+		// start a go routine to execute the backup task, add one to the counter
+		r.Wg.Add(1)
+		go func(db operatorkubecentercomv1beta1.BackUp) {
+			//decrement the counter when the task is done
+			defer r.Wg.Done()
+			for {
+				// time is up for the next ticker, start the backup task
+				<-ticker.C
+				// reset the ticker. since the task is executed periodically
+				ticker.Reset(time.Duration(db.Spec.Period) * time.Minute)
+				// TODO: execute the task
+
+			}
+		}(backup)
+	}
+
+	// wait for the go routines
+	r.Wg.Wait()
+
+}
+
+func (r *BackUpReconciler) GetActualStartTime(startTime string) time.Duration {
+	// get the expected start time from request
+	hoursAndMinutes := strings.Split(startTime, ":")
+	hours, _ := strconv.Atoi(hoursAndMinutes[0])
+	minutes, _ := strconv.Atoi(hoursAndMinutes[1])
+
+	now := time.Now().Truncate(time.Second)
+
+	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	todayEnd := todayStart.Add(time.Hour * 24)
+
+	// the result to be returned should be the duration
+	var seconds int
+
+	expectedTime := time.Hour*time.Duration(hours) + time.Minute*time.Duration(minutes)
+	currentTime := time.Hour*time.Duration(now.Hour()) + time.Minute*time.Duration(now.Minute())
+
+	if currentTime >= expectedTime {
+		// executed it after 24 hours
+		seconds = int(todayEnd.Add(expectedTime).Sub(now).Seconds())
+	} else {
+		seconds = int(todayStart.Add(expectedTime).Sub(now).Seconds())
+	}
+	return time.Duration(seconds) * time.Second
 }
 
 // SetupWithManager sets up the controller with the Manager.

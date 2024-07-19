@@ -51,9 +51,9 @@ type Destination struct {
 type BackUpSpec struct {
 	// Whether the backup is enabled
 	Enable bool `json:"enable"`
-	// The time when the backup starts
+	// The expected time when the backup starts, example: 11:30
 	StartTime string `json:"startTime"`
-	// The period for backups
+	// The period for backups, in minutes.
 	Period int `json:"period"`
 	// The Origin of the data source
 	Origin string `json:"origin"`
@@ -65,6 +65,13 @@ type BackUpSpec struct {
 type BackUpStatus struct {
 	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
+
+	// Whether the backup is active
+	Active bool `json:"active"`
+	// The time when the next backup will start
+	NextTime string `json:"nextTime"`
+	//The result of the last backup
+	LastBackupResult string `json:"lastBackupResult"`
 }
 
 // +kubebuilder:object:root=true
