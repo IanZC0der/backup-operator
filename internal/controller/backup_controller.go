@@ -88,18 +88,20 @@ func (r *BackUpReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	if err != nil {
 		// resource doesn't exist
 		if errors.IsNotFound(err) {
+			logger.Sugar().Infof("request: [%s] in namespace [%s] stopped because of not found error", req.Name, req.Namespace)
 			// recource not found, delete from queue
 			r.DeleteQueue(req.Name)
 			return ctrl.Result{}, nil
 		}
+		logger.Sugar().Errorf("request: [%s] in namespace [%s] stopped, err: %v", req.Name, req.Namespace, err)
 		return ctrl.Result{}, err
 	}
 
 	// resource exists
-
 	// if the spec is the same as the last backup, return
 	if lastBackup, ok := r.BackupQueue[backupK8S.Name]; ok {
 		if isSame := reflect.DeepEqual(backupK8S.Spec, lastBackup.Spec); isSame {
+			logger.Sugar().Warnf("request: [%s] in namespace [%s] already existed in the task queue, thus not being executed", req.Name, req.Namespace)
 			return ctrl.Result{}, nil
 		}
 	}
@@ -142,6 +144,7 @@ func (r *BackUpReconciler) StopTask() {
 func (r *BackUpReconciler) StartTask() {
 	for _, backup := range r.BackupQueue {
 		if !backup.Spec.Enable {
+			logger.Sugar().Infof("backup task: [%s] in namespace [%s] has been disabled.", backup.Name, backup.Namespace)
 			backup.Status.Active = false
 			r.UpdateStatus(backup)
 			continue
@@ -229,12 +232,14 @@ func (r *BackUpReconciler) UpdateStatus(backup operatorkubecentercomv1beta1.Back
 
 	err := r.Get(ctx, namespacedName, &backupK8S)
 	if err != nil {
+		logger.Sugar().Errorf("status update: [%s] in namespace [%s] failed, err: %v", backup.Name, backup.Namespace, err)
 		return
 	}
 	// update the backup status, including all the fields in backup.Status
 	backupK8S.Status = backup.Status
 	err = r.Client.Status().Update(ctx, &backupK8S)
 	if err != nil {
+		logger.Sugar().Errorf("status update: [%s] in namespace [%s] failed, err: %v", backup.Name, backup.Namespace, err)
 		return
 	}
 }
