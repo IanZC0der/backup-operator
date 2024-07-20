@@ -10,11 +10,11 @@ make install
 
 ## build operator
 ```bash
-make docker-build docker-push IMG=harbor.kubecenter.com/operator/backup-operator:v1beta1
+make docker-build docker-push IMG=ianzhang0405/backup-operator:v1beta4
 ```
 
 ## deploy
 ```bash
-make deploy IMG=harbor.kubecenter.com/operator/backup-operator:v1beta1
+make deploy IMG=ianzhang0405/backup-operator:v1beta4
 ```
 
