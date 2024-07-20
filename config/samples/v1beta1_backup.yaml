@@ -1,9 +1,0 @@
-apiVersion: operator.kubecenter.com/v1beta1
-kind: BackUp
-metadata:
-  labels:
-    app.kubernetes.io/name: backup-operator
-    app.kubernetes.io/managed-by: kustomize
-  name: backup-sample
-spec:
-  # TODO(user): Add fields here
