@@ -26,16 +26,19 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o ma
 # Use distroless as minimal base image to package the manager binary
 # Refer to https://github.com/GoogleContainerTools/distroless for more details
 # Base image
-FROM alpine:3.14
-RUN apk add --no-cache mysql-client tzdata bash
+#FROM alpine:3.14
+#RUN apk add --no-cache mysql-client tzdata bash
 
 #FROM gcr.io/distroless/static-debian12:latest
+FROM debian:stable-slim
 WORKDIR /
 COPY --from=builder /workspace/manager .
 #COPY --from=base /usr/bin/mysql /usr/bin/mysql
 #COPY --from=base /usr/bin/bash /usr/bin/bash
+RUN apt-get -y update
+RUN apt-get install -y default-mysql-client
 ENV TZ=America/Chicago
-USER root
+#USER root
 #USER 65532:65532
 
 ENTRYPOINT ["/manager"]

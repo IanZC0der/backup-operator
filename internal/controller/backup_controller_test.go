@@ -38,7 +38,7 @@ var _ = Describe("BackUp Controller", func() {
 
 		typeNamespacedName := types.NamespacedName{
 			Name:      resourceName,
-			Namespace: "default", // TODO(user):Modify as needed
+			Namespace: "backup-operator-system", // TODO(user):Modify as needed
 		}
 		backup := &operatorkubecentercomv1beta1.BackUp{}
 
@@ -49,9 +49,8 @@ var _ = Describe("BackUp Controller", func() {
 				resource := &operatorkubecentercomv1beta1.BackUp{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      resourceName,
-						Namespace: "default",
+						Namespace: "backup-operator-system",
 					},
-					// TODO(user): Specify other spec details if needed.
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}

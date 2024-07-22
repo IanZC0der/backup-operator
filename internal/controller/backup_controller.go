@@ -69,7 +69,7 @@ type BackUpReconciler struct {
 	BackupQueue map[string]operatorkubecentercomv1beta1.BackUp
 	Wg          sync.WaitGroup
 	Tickers     []*time.Ticker
-	lock        sync.Mutex
+	lock        sync.RWMutex
 }
 
 // +kubebuilder:rbac:groups=operator.kubecenter.com,resources=backups,verbs=get;list;watch;create;update;patch;delete
@@ -105,8 +105,9 @@ func (r *BackUpReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	// resource exists
 	// if the spec is the same as the last backup, return
 	if lastBackup, ok := r.BackupQueue[backupK8S.Name]; ok {
-		if isSame := reflect.DeepEqual(backupK8S.Spec, lastBackup.Spec); isSame {
-			logger.Sugar().Warnf("request: [%s] in namespace [%s] already existed in the task queue, thus not being executed", req.Name, req.Namespace)
+		isSame := reflect.DeepEqual(backupK8S.Spec, lastBackup.Spec)
+		if isSame {
+			//logger.Sugar().Warnf("request: [%s] in namespace [%s] already existed in the task queue, will be executed soon", req.Name, req.Namespace)
 			return ctrl.Result{}, nil
 		}
 	}
@@ -147,26 +148,31 @@ func (r *BackUpReconciler) StopTask() {
 /*
  */
 func (r *BackUpReconciler) StartTask() {
-	for _, backup := range r.BackupQueue {
+	for name, backup := range r.BackupQueue {
 		if !backup.Spec.Enable {
-			logger.Sugar().Infof("backup task: [%s] in namespace [%s] has been disabled.", backup.Name, backup.Namespace)
+			logger.Sugar().Infof("backup task: [%s] in namespace [%s] has been disabled.", name, backup.Namespace)
 			backup.Status.Active = false
-			r.UpdateStatus(backup)
+			r.UpdateStatus(&backup)
 			continue
 		}
 
 		// the expected start time is specified in the spec. compare with the current time and get its actual start time
 		actualStartTime := r.GetActualStartTime(backup.Spec.StartTime)
+		if actualStartTime.Hours() < 1 {
+			logger.Sugar().Infof("back up task [%s] will be executed in %.1f minutes", name, actualStartTime.Minutes())
+		} else {
+			logger.Sugar().Infof("back up task [%s] will be executed in %.1f hours", name, actualStartTime.Hours())
+		}
 		// get next start time and set the status to active
 		backup.Status.Active = true
 		nextStartTime := r.GetNextTime(actualStartTime.Seconds())
 		backup.Status.NextTime = nextStartTime.Unix()
-		r.UpdateStatus(backup)
+		r.UpdateStatus(&backup)
 		ticker := time.NewTicker(actualStartTime)
 		r.Tickers = append(r.Tickers, ticker)
 		// start a go routine to execute the backup task, add one to the counter
 		r.Wg.Add(1)
-		go func(db operatorkubecentercomv1beta1.BackUp) {
+		go func(db *operatorkubecentercomv1beta1.BackUp) {
 			//decrement the counter when the task is done
 			defer r.Wg.Done()
 			for {
@@ -186,9 +192,9 @@ func (r *BackUpReconciler) StartTask() {
 					logger.Sugar().Infof("backup task: [%s] in namespace [%s] successfully executed", db.Name, db.Namespace)
 					db.Status.LastBackupResult = "backup task successfully executed"
 				}
-				r.UpdateStatus(backup)
+				r.UpdateStatus(db)
 			}
-		}(backup)
+		}(&backup)
 	}
 
 	// wait for the go routines
@@ -234,7 +240,7 @@ func (r *BackUpReconciler) GetNextTime(currentSeconds float64) time.Time {
 	return currentTime.Add(time.Duration(currentSeconds) * time.Second)
 }
 
-func (r *BackUpReconciler) UpdateStatus(backup operatorkubecentercomv1beta1.BackUp) {
+func (r *BackUpReconciler) UpdateStatus(backup *operatorkubecentercomv1beta1.BackUp) {
 	r.lock.Lock()
 	defer r.lock.Unlock()
 	ctx := context.TODO()
@@ -265,7 +271,7 @@ Dump the data in mysql server and upload it to minIO storage
 1. run the dump command to dump data from mysql server and save it to a new file
 2. upload it to minIO
 */
-func (r *BackUpReconciler) ExecuteBackUpTask(backup operatorkubecentercomv1beta1.BackUp) error {
+func (r *BackUpReconciler) ExecuteBackUpTask(backup *operatorkubecentercomv1beta1.BackUp) error {
 
 	defer func() {
 		if err := recover(); err != nil {
@@ -338,5 +344,5 @@ func (r *BackUpReconciler) ExecuteBackUpTask(backup operatorkubecentercomv1beta1
 		logger.Sugar().Errorf("error putting data to minio, err: %v, backup task name: %s", err, backup.Name)
 		return err
 	}
-	return err
+	return nil
 }
